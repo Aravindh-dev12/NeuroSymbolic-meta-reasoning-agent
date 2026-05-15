@@ -1,0 +1,58 @@
+agent:
+  name: "NeuroSymbolicMetaAgent"
+  version: "1.0.0"
+  llm_model: "claude-sonnet-4-20250514"
+  confidence_threshold: 0.75
+  max_self_improvement_rounds: 3
+  max_planning_depth: 5
+  verbose: true
+
+routing:
+  symbolic_task_types:
+    - logic
+    - math
+    - constraint
+    - formal_verification
+    - deduction
+    - theorem_proving
+  neural_task_types:
+    - nlp
+    - classification
+    - sentiment
+    - generation
+    - similarity
+    - summarisation
+    - entity_recognition
+  hybrid_task_types:
+    - planning
+    - question_answering
+    - reasoning
+    - analogy
+
+memory:
+  working_memory_capacity: 20        # max items in WM
+  episodic_memory_path: "logs/episodic_store.json"
+  embedding_model: "all-MiniLM-L6-v2"
+  retrieval_top_k: 5
+  similarity_threshold: 0.6
+
+symbolic:
+  solver: "z3"
+  timeout_seconds: 10
+  max_iterations: 1000
+
+neural:
+  embedding_dim: 384
+  classifier_hidden_dim: 256
+  device: "cpu"                       # or "cuda"
+  batch_size: 32
+
+constitutional:
+  principles_file: "configs/constitutional_principles.yaml"
+  max_violations_before_halt: 2
+  strict_mode: false
+
+logging:
+  level: "INFO"
+  trace_file: "logs/reasoning_traces.jsonl"
+  log_file: "logs/agent.log"

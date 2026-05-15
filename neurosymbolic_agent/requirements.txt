@@ -1,0 +1,47 @@
+# Production-grade dependencies for NeuroSymbolic AGI Agent
+# Local LLM Support
+llama-cpp-python>=0.2.0
+# For GPU support: pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121
+
+# Vector Databases
+chromadb>=0.4.0
+faiss-cpu>=1.8.0
+# For GPU support: faiss-gpu>=1.8.0
+
+# ML/AI Core
+torch>=2.2.0
+transformers>=4.40.0
+sentence-transformers>=3.0.0
+numpy>=1.26.0
+
+# Symbolic Reasoning
+z3-solver>=4.13.0
+
+# Cloud LLMs (optional)
+anthropic>=0.25.0
+openai>=1.0.0
+
+# Configuration & Validation
+pydantic>=2.7.0
+pyyaml>=6.0.1
+python-dotenv>=1.0.0
+
+# Logging & Monitoring
+loguru>=0.7.2
+rich>=13.7.0
+psutil>=5.9.0
+
+# Utilities
+tenacity>=8.3.0
+tqdm>=4.66.0
+requests>=2.31.0
+
+# Jupyter Support
+jupyter>=1.0.0
+ipywidgets>=8.1.0
+notebook>=7.0.0
+
+# Testing
+pytest>=8.2.0
+pytest-asyncio>=0.23.0
+pytest-cov>=4.1.0

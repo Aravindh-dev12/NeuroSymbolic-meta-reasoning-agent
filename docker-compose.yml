@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  neurosymbolic-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: base  # Use 'cpu-base' for CPU-only
+    container_name: neurosymbolic-agent
+    volumes:
+      # Mount data directories for persistence
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./models:/app/models
+      - ./cache:/app/cache
+      - ./configs:/app/configs
+    environment:
+      # LLM Backend Configuration
+      - LLM_BACKEND=local
+      - LOCAL_MODEL_NAME=llama3-8b
+      - CONFIDENCE_THRESHOLD=0.75
+      - ENABLE_TELEMETRY=true
+      
+      # Memory Configuration
+      - VECTOR_DB_TYPE=chroma
+      - VECTOR_DB_DIR=/app/data/vector_db
+      
+      # Logging
+      - LOG_LEVEL=INFO
+      - LOG_TO_CONSOLE=true
+      
+      # Optional: Cloud LLM API Keys
+      # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # - OPENAI_API_KEY=${OPENAI_API_KEY}
+    
+    # GPU support (uncomment if using NVIDIA runtime)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    
+    ports:
+      - "8000:8000"
+    
+    stdin_open: true
+    tty: true
+    
+    restart: unless-stopped
+    
+    networks:
+      - agent-network
+
+  # Optional: Jupyter notebook service
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: base
+    container_name: neurosymbolic-jupyter
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./models:/app/models
+      - ./cache:/app/cache
+      - ./configs:/app/configs
+      - ./notebooks:/app/notebooks
+    environment:
+      - LLM_BACKEND=local
+      - LOCAL_MODEL_NAME=llama3-8b
+    command: >
+      sh -c "pip install jupyter notebook ipywidgets && 
+             jupyter notebook --ip=0.0.0.0 --port=8888 
+             --no-browser --allow-root --NotebookApp.token=''"
+    ports:
+      - "8888:8888"
+    networks:
+      - agent-network
+
+networks:
+  agent-network:
+    driver: bridge
+
+volumes:
+  data:
+  logs:
+  models:
+  cache:
