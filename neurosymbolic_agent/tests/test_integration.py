@@ -59,6 +59,8 @@ class TestMemoryIntegration:
             working_memory_capacity=10,
             episodic_memory_path=os.path.join(self.tmpdir, "ep.json"),
             embedding_dim=3,
+            vector_db_type="sqlite",
+            persist_directory=os.path.join(self.tmpdir, "vector_db"),
         )
 
     def test_store_then_retrieve_episode(self):

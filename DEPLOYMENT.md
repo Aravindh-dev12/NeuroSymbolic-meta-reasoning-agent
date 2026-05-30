@@ -131,18 +131,36 @@ LOG_LEVEL=INFO
 ### Running the Agent
 
 ```bash
+# Install the CLI from the repository root
+python -m pip install -e ".[dashboard]"
+
 # Interactive mode
-python main.py --interactive
+agent start
 
 # Single task
-python main.py --task "Your task here"
+agent run "Your task here"
 
 # With specific backend
-python main.py --backend anthropic --task "Your task here"
+agent --backend anthropic run "Your task here"
 
 # With specific model
-python main.py --backend local --model mistral-7b --task "Your task here"
+agent --backend local --model mistral-7b run "Your task here"
+
+# Web dashboard
+agent serve
 ```
+
+## Hugging Face Spaces
+
+This project can be deployed as a free public Gradio Space:
+
+```bash
+set HF_TOKEN=your_huggingface_write_token
+set HF_SPACE_NAME=NeuroSymbolic-Meta-Reasoner
+python deploy_to_hf.py
+```
+
+The deployment script creates or updates the Space, uploads the repository, and relies on the root `requirements.txt` to install the package before `app.py` starts.
 
 ## Production Deployment
 

@@ -1,5 +1,6 @@
 """
 tests/test_meta_controller.py — Unit tests for MetaController routing logic.
+Uses a mocked Embedder to avoid loading the full sentence-transformers model.
 """
 import sys
 from pathlib import Path
@@ -7,16 +8,29 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 from unittest.mock import patch, MagicMock
+import numpy as np
 import json
 
-from neural.embedder import Embedder
-from neural.classifier import TaskClassifier, TaskType
+from neural.classifier import TaskClassifier, TaskType, ClassificationResult
 from agent.meta_controller import MetaController, RoutingDecision
+
+
+class MockEmbedder:
+    """Lightweight mock that returns random embeddings without loading a model."""
+    def __init__(self, dim: int = 384):
+        self.dim = dim
+
+    def embed(self, text: str) -> np.ndarray:
+        np.random.seed(hash(text) % 2**31)
+        return np.random.rand(self.dim).astype(np.float32)
+
+    def embed_batch(self, texts: list[str]) -> np.ndarray:
+        return np.array([self.embed(t) for t in texts])
 
 
 class TestTaskClassifier:
     def setup_method(self):
-        self.embedder = Embedder()
+        self.embedder = MockEmbedder()
         self.classifier = TaskClassifier(self.embedder)
 
     def test_symbolic_keywords_detected(self):
@@ -68,17 +82,15 @@ class TestRoutingDecision:
 
 class TestMetaControllerFallback:
     def setup_method(self):
-        self.embedder = Embedder()
+        self.embedder = MockEmbedder()
         self.classifier = TaskClassifier(self.embedder)
 
     def test_fallback_routing_symbolic(self):
-        from neural.classifier import ClassificationResult
         mc = MetaController.__new__(MetaController)
         mc.confidence_threshold = 0.75
         mc._embedder = self.embedder
         mc._classifier = self.classifier
 
-        from neural.classifier import TaskType, ClassificationResult
         result = mc._fallback_routing(
             "prove theorem X",
             ClassificationResult(

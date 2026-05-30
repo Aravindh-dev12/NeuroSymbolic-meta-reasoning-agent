@@ -1,0 +1,2 @@
+# Hugging Face Spaces installs this file before running app.py.
+-e .[dashboard]

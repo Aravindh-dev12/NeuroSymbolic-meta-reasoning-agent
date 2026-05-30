@@ -158,14 +158,14 @@ class EpisodicMemory:
 
     def _save(self) -> None:
         data = [ep.to_dict() for ep in self._episodes]
-        with open(self.persist_path, "w") as f:
+        with open(self.persist_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
     def _load(self) -> None:
         if not Path(self.persist_path).exists():
             return
         try:
-            with open(self.persist_path) as f:
+            with open(self.persist_path, encoding="utf-8") as f:
                 data = json.load(f)
             for d in data:
                 self._episodes.append(Episode(**d))

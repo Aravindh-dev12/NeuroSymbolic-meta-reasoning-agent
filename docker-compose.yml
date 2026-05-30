@@ -17,12 +17,13 @@ services:
     environment:
       # LLM Backend Configuration
       - LLM_BACKEND=local
-      - LOCAL_MODEL_NAME=llama3-8b
+      - LOCAL_MODEL_NAME=auto
+      - ALLOW_HEURISTIC_FALLBACK=true
       - CONFIDENCE_THRESHOLD=0.75
       - ENABLE_TELEMETRY=true
       
       # Memory Configuration
-      - VECTOR_DB_TYPE=chroma
+      - VECTOR_DB_TYPE=sqlite
       - VECTOR_DB_DIR=/app/data/vector_db
       
       # Logging
@@ -43,7 +44,7 @@ services:
     #           capabilities: [gpu]
     
     ports:
-      - "8000:8000"
+      - "7860:7860"
     
     stdin_open: true
     tty: true
@@ -69,7 +70,7 @@ services:
       - ./notebooks:/app/notebooks
     environment:
       - LLM_BACKEND=local
-      - LOCAL_MODEL_NAME=llama3-8b
+      - LOCAL_MODEL_NAME=auto
     command: >
       sh -c "pip install jupyter notebook ipywidgets && 
              jupyter notebook --ip=0.0.0.0 --port=8888 

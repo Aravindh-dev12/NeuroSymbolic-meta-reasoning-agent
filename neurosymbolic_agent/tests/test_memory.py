@@ -175,6 +175,8 @@ class TestMemoryManager:
             retrieval_top_k=3,
             similarity_threshold=0.5,
             embedding_dim=3,
+            vector_db_type="sqlite",
+            persist_directory=os.path.join(self.tmpdir, "vector_db"),
         )
 
     def test_store_reasoning_step(self):

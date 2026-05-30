@@ -27,6 +27,7 @@ class LLMBackend(Enum):
     OLLAMA = "ollama"
     VLLM = "vllm"
     TRANSFORMERS = "transformers"
+    HEURISTIC = "heuristic"
 
 
 @dataclass
@@ -52,6 +53,12 @@ class LocalLLMManager:
 
     # Pre-configured production models
     PRODUCTION_MODELS = {
+        "agentic-rules": ModelConfig(
+            name="agentic-rules",
+            backend=LLMBackend.HEURISTIC,
+            model_id="offline-structured-agentic-fallback",
+            context_length=8192,
+        ),
         "llama3-8b": ModelConfig(
             name="llama3-8b",
             backend=LLMBackend.LLAMA_CPP,
@@ -85,6 +92,48 @@ class LocalLLMManager:
             backend=LLMBackend.OLLAMA,
             model_id="llama3",
             context_length=8192,
+        ),
+        "ollama-llama3.1": ModelConfig(
+            name="ollama-llama3.1",
+            backend=LLMBackend.OLLAMA,
+            model_id="llama3.1:8b",
+            context_length=131072,
+        ),
+        "ollama-qwen2.5": ModelConfig(
+            name="ollama-qwen2.5",
+            backend=LLMBackend.OLLAMA,
+            model_id="qwen2.5:7b",
+            context_length=32768,
+        ),
+        "ollama-deepseek-r1": ModelConfig(
+            name="ollama-deepseek-r1",
+            backend=LLMBackend.OLLAMA,
+            model_id="deepseek-r1:7b",
+            context_length=32768,
+        ),
+        "ollama-mistral": ModelConfig(
+            name="ollama-mistral",
+            backend=LLMBackend.OLLAMA,
+            model_id="mistral:7b",
+            context_length=32768,
+        ),
+        "ollama-phi4-mini": ModelConfig(
+            name="ollama-phi4-mini",
+            backend=LLMBackend.OLLAMA,
+            model_id="phi4-mini",
+            context_length=131072,
+        ),
+        "transformers-tinyllama": ModelConfig(
+            name="transformers-tinyllama",
+            backend=LLMBackend.TRANSFORMERS,
+            model_id="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+            context_length=4096,
+        ),
+        "transformers-qwen2.5-0.5b": ModelConfig(
+            name="transformers-qwen2.5-0.5b",
+            backend=LLMBackend.TRANSFORMERS,
+            model_id="Qwen/Qwen2.5-0.5B-Instruct",
+            context_length=32768,
         ),
     }
 
@@ -128,6 +177,8 @@ class LocalLLMManager:
             self._init_ollama()
         elif self.config.backend == LLMBackend.TRANSFORMERS:
             self._init_transformers()
+        elif self.config.backend == LLMBackend.HEURISTIC:
+            logger.warning("[LocalLLM] Using offline heuristic fallback; install Ollama or llama.cpp for real local LLM inference.")
         else:
             raise ValueError(f"Unsupported backend: {self.config.backend}")
 
@@ -292,8 +343,103 @@ class LocalLLMManager:
                 return self._generate_transformers(
                     prompt, system_prompt, max_tokens, temperature, top_p, stop, json_mode
                 )
+            elif self.config.backend == LLMBackend.HEURISTIC:
+                return self._generate_heuristic(prompt, system_prompt, json_mode)
             else:
                 raise ValueError(f"Unsupported backend: {self.config.backend}")
+
+    def _generate_heuristic(
+        self,
+        prompt: str,
+        system_prompt: Optional[str],
+        json_mode: bool,
+    ) -> str:
+        """Structured offline fallback used when no local LLM runtime is available."""
+        system = (system_prompt or "").lower()
+        prompt_lower = prompt.lower()
+
+        if "meta-controller" in system:
+            symbolic_terms = [
+                "solve", "equation", "all ", "if ", "then", "logic", "proof",
+                "constraint", "derivative", "integral", "system of equations",
+            ]
+            neural_terms = ["sentiment", "summarize", "summarise", "classify", "translate", "write"]
+            needs_planning = any(term in prompt_lower for term in ["plan", "multi-step", "complex", "optimize", "puzzle"])
+            if any(term in prompt_lower for term in symbolic_terms):
+                path = "symbolic"
+                task_type = "symbolic_reasoning"
+                confidence = 0.72
+            elif any(term in prompt_lower for term in neural_terms):
+                path = "neural"
+                task_type = "neural_language_task"
+                confidence = 0.62
+            else:
+                path = "hybrid"
+                task_type = "general_reasoning"
+                confidence = 0.55
+            return json.dumps({
+                "path": path,
+                "confidence": confidence,
+                "task_type": task_type,
+                "reasoning": "Offline fallback routed the task using deterministic agentic heuristics.",
+                "needs_planning": needs_planning,
+                "facts_extracted": [],
+                "subtask_hints": [],
+            })
+
+        if "neural inference engine" in system:
+            label = "general"
+            confidence = 0.5
+            output = "I can process this with limited offline language heuristics, but a local open-weight model will produce a stronger answer."
+            if "sentiment" in prompt_lower:
+                positive = sum(word in prompt_lower for word in ["good", "great", "excellent", "fast", "intuitive", "love"])
+                negative = sum(word in prompt_lower for word in ["bad", "poor", "slow", "disappointing", "hate", "high"])
+                if positive > negative:
+                    output, label, confidence = "Positive sentiment.", "sentiment_analysis", 0.66
+                elif negative > positive:
+                    output, label, confidence = "Negative sentiment.", "sentiment_analysis", 0.66
+                else:
+                    output, label, confidence = "Mixed or neutral sentiment.", "sentiment_analysis", 0.55
+            return json.dumps({
+                "output": output,
+                "confidence": confidence,
+                "task_type": label,
+                "reasoning": "Generated by the offline fallback because no local LLM runtime was available.",
+            })
+
+        if "hybrid reasoning engine" in system:
+            symbolic = self._extract_after(prompt, "Symbolic reasoning result:")
+            neural = self._extract_after(prompt, "Neural reasoning result:")
+            answer = symbolic if symbolic and "could not" not in symbolic.lower() else neural
+            return json.dumps({
+                "answer": answer.strip() or "No reliable answer was produced by the fallback engines.",
+                "confidence": 0.55,
+                "reasoning": "Selected the strongest available symbolic/neural fallback result.",
+            })
+
+        if "self-critic" in system:
+            return json.dumps({
+                "has_issues": False,
+                "issues": [],
+                "failure_modes": ["none"],
+                "suggested_correction": "",
+                "corrected_answer": self._extract_after(prompt, "Agent's answer:") or prompt,
+                "corrected_confidence": 0.55,
+                "improvement_achieved": False,
+                "reasoning_trace": ["Offline fallback critique found no deterministic issue."],
+            })
+
+        return "{}" if json_mode else "Offline fallback did not have a specialized handler for this prompt."
+
+    @staticmethod
+    def _extract_after(text: str, marker: str) -> str:
+        if marker not in text:
+            return ""
+        fragment = text.split(marker, 1)[1]
+        for next_marker in ("\n\n", "Neural confidence:", "Proof steps:"):
+            if next_marker in fragment:
+                fragment = fragment.split(next_marker, 1)[0]
+        return fragment.strip()
 
     def _generate_llama_cpp(
         self,
@@ -450,9 +596,28 @@ def create_llm_manager(
     Returns:
         Configured LocalLLMManager instance
     """
+    if model_name in ("auto", "default"):
+        model_name = _select_auto_model()
+
     if model_name not in LocalLLMManager.PRODUCTION_MODELS:
         available = ", ".join(LocalLLMManager.PRODUCTION_MODELS.keys())
         raise ValueError(f"Unknown model: {model_name}. Available: {available}")
     
     config = LocalLLMManager.PRODUCTION_MODELS[model_name]
     return LocalLLMManager(config, models_dir=models_dir, use_gpu=use_gpu)
+
+
+def _select_auto_model() -> str:
+    """Prefer a local Ollama runtime when it is already installed/running."""
+    try:
+        result = subprocess.run(
+            ["ollama", "list"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if result.returncode == 0:
+            return "ollama-qwen2.5"
+    except Exception:
+        pass
+    return "llama3-8b"

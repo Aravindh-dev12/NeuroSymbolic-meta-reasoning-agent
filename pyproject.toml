@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neurosymbolic-meta-reasoning-agent"
+version = "2.1.0"
+description = "CLI-first NeuroSymbolic meta-reasoning agent with local open-weight LLM support, symbolic reasoning, memory, planning, and constitutional checks."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "Aravindh-dev12" }
+]
+dependencies = [
+  "anthropic>=0.25.0",
+  "chromadb>=0.4.0",
+  "faiss-cpu>=1.8.0",
+  "huggingface_hub>=0.19.0",
+  "loguru>=0.7.2",
+  "numpy>=1.26.0",
+  "openai>=1.0.0",
+  "psutil>=5.9.0",
+  "pydantic>=2.7.0",
+  "python-dotenv>=1.0.0",
+  "pyyaml>=6.0.1",
+  "requests>=2.31.0",
+  "rich>=13.7.0",
+  "sentence-transformers>=3.0.0",
+  "sympy>=1.12",
+  "tenacity>=8.3.0",
+  "torch>=2.2.0",
+  "tqdm>=4.66.0",
+  "transformers>=4.40.0",
+  "z3-solver>=4.13.0"
+]
+
+[project.optional-dependencies]
+dashboard = [
+  "gradio>=4.0.0",
+  "pandas>=2.0.0",
+  "plotly>=5.0.0"
+]
+local-llm = [
+  "llama-cpp-python>=0.2.0"
+]
+kaggle = [
+  "kaggle>=1.6.0"
+]
+dev = [
+  "pytest>=8.2.0",
+  "pytest-asyncio>=0.23.0",
+  "pytest-cov>=4.1.0"
+]
+
+[project.scripts]
+agent = "neurosymbolic_agent.cli:main"
+neuro-agent = "neurosymbolic_agent.cli:main"
+neurosymbolic-agent = "neurosymbolic_agent.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["neurosymbolic_agent*"]
+
+[tool.setuptools.package-data]
+neurosymbolic_agent = ["configs/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["neurosymbolic_agent/tests"]
+pythonpath = ["neurosymbolic_agent"]

@@ -1,0 +1,13 @@
+{
+  "id": "aravindh-dev12/neurosymbolic-meta-reasoning-agent",
+  "title": "NeuroSymbolic Meta-Reasoning Agent",
+  "code_file": "run_agent.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": false,
+  "enable_gpu": false,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": []
+}

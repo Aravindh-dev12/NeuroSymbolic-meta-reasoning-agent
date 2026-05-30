@@ -142,7 +142,7 @@ class KnowledgeBase:
         }
 
     def _load(self, path: str) -> None:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
         for f in data.get("facts", []):
             self.facts.append(Fact(**f))
@@ -150,7 +150,7 @@ class KnowledgeBase:
     def save(self) -> None:
         if not self.persist_path:
             return
-        with open(self.persist_path, "w") as f:
+        with open(self.persist_path, "w", encoding="utf-8") as f:
             json.dump(
                 {"facts": [{"predicate": f.predicate, "args": f.args} for f in self.facts]},
                 f, indent=2,

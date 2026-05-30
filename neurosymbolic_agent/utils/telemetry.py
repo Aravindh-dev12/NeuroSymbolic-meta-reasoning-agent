@@ -163,7 +163,7 @@ class TelemetryManager:
     def _persist_session(self, metrics: PerformanceMetrics):
         """Persist session metrics to log file."""
         try:
-            with open(self.log_file, "a") as f:
+            with open(self.log_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps({
                     "task": metrics.task,
                     "start_time": datetime.fromtimestamp(metrics.start_time).isoformat(),

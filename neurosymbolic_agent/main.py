@@ -13,6 +13,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from typing import Optional
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -41,6 +42,12 @@ from utils.trace_recorder import TraceRecorder
 console = Console()
 
 
+def console_safe(value) -> str:
+    """Return text that can be printed by the active Windows console encoding."""
+    encoding = getattr(console.file, "encoding", None) or sys.stdout.encoding or "utf-8"
+    return str(value).encode(encoding, errors="replace").decode(encoding, errors="replace")
+
+
 class NeuroSymbolicAgent:
     """
     Production-grade NeuroSymbolic AGI Agent.
@@ -56,7 +63,9 @@ class NeuroSymbolicAgent:
 
     def __init__(self, config_path: str = "configs/agent_config.yaml"):
         self.config = load_config(config_path)
-        principles_raw = load_principles(self.config.constitutional.principles_file)
+        principles_raw = load_principles(
+            str(self._resolve_project_path(config_path, self.config.constitutional.principles_file))
+        )
 
         setup_logging(
             self.config.logging.log_file,
@@ -75,10 +84,22 @@ class NeuroSymbolicAgent:
         self.local_llm: Optional[LocalLLMManager] = None
         if self.config.agent.llm_backend == "local":
             logger.info(f"[Agent] Initializing local LLM: {self.config.agent.local_model_name}")
-            self.local_llm = create_llm_manager(
-                model_name=self.config.agent.local_model_name,
-                use_gpu=True,
-            )
+            try:
+                self.local_llm = create_llm_manager(
+                    model_name=self.config.agent.local_model_name,
+                    use_gpu=True,
+                )
+            except Exception as exc:
+                if not self.config.agent.allow_heuristic_fallback:
+                    raise
+                logger.warning(
+                    "[Agent] Local LLM startup failed; using offline heuristic fallback. "
+                    f"Original error: {exc}"
+                )
+                self.local_llm = create_llm_manager(
+                    model_name="agentic-rules",
+                    use_gpu=False,
+                )
 
         # ── Core components ───────────────────────────────────────────────────
         self.embedder = Embedder(
@@ -104,7 +125,7 @@ class NeuroSymbolicAgent:
         
         # Determine model based on backend
         if self.config.agent.llm_backend == "local":
-            model_name = self.config.agent.local_model_name
+            model_name = self.local_llm.config.name if self.local_llm else self.config.agent.local_model_name
         elif self.config.agent.llm_backend == "anthropic":
             model_name = self.config.agent.anthropic_model
         else:
@@ -152,7 +173,7 @@ class NeuroSymbolicAgent:
 
         logger.info(f"[Agent] {self.config.agent.name} v{self.config.agent.version} ready")
         logger.info(f"[Agent] LLM Backend: {self.config.agent.llm_backend}")
-        console.print(f"\n[meta]🧬 {self.config.agent.name} v{self.config.agent.version} initialised[/meta]\n")
+        console.print(f"\n[bold]{self.config.agent.name} v{self.config.agent.version} initialized[/bold]\n")
         console.print(f"[dim]Backend: {self.config.agent.llm_backend} | Model: {model_name}[/dim]\n")
 
     def run(self, task: str) -> str:
@@ -166,7 +187,7 @@ class NeuroSymbolicAgent:
         # Start telemetry session
         metrics = self.telemetry.start_session(task)
 
-        console.print(f"\n[bold]📋 Task:[/bold] {task}\n")
+        console.print(f"\n[bold]Task:[/bold] {console_safe(task)}\n")
 
         try:
             result = self._run_pipeline(task, trace_id, metrics)
@@ -175,12 +196,13 @@ class NeuroSymbolicAgent:
         except Exception as e:
             logger.error(f"[Agent] Pipeline error: {e}", exc_info=True)
             self.telemetry.end_session(success=False, error_message=str(e))
-            self.trace_recorder.complete_trace(
-                final_answer=f"Error: {e}",
-                final_confidence=0.0,
-                path_used="error",
-                success=False,
-            )
+            if self.trace_recorder.current_trace is not None:
+                self.trace_recorder.complete_trace(
+                    final_answer=f"Error: {e}",
+                    final_confidence=0.0,
+                    path_used="error",
+                    success=False,
+                )
             return f"I encountered an error processing your task: {e}"
 
     def _run_pipeline(self, task: str, trace_id: str, metrics) -> str:
@@ -211,20 +233,20 @@ class NeuroSymbolicAgent:
         )
 
         if self.config.agent.verbose:
-            console.print(f"[routing]🔀 Path: {routing.path} | Confidence: {routing.confidence:.2%}[/routing]")
-            console.print(f"[dim]{routing.reasoning}[/dim]\n")
+            console.print(f"[bold]Path:[/bold] {routing.path} | Confidence: {routing.confidence:.2%}")
+            console.print(f"[dim]{console_safe(routing.reasoning)}[/dim]\n")
 
         # ── Step 3: Optional hierarchical planning ────────────────────────────
         if routing.needs_planning:
             plan = self.planner.decompose(task)
-            console.print(f"[planning]📐 Plan: Decomposed into {len(plan.subtasks)} subtasks. Running sequential execution...[/planning]")
+            console.print(f"[bold]Plan:[/bold] Decomposed into {len(plan.subtasks)} subtasks. Running sequential execution...")
             
             # Topological sort of subtasks to resolve dependencies
             sorted_subtasks = self.planner.topological_sort(plan.subtasks)
             subtask_memories = []
             
             for idx, subtask in enumerate(sorted_subtasks):
-                console.print(f"[planning]⏳ Running Subtask {idx+1}/{len(sorted_subtasks)}: {subtask.description} ({subtask.task_type})[/planning]")
+                console.print(f"[bold]Subtask {idx+1}/{len(sorted_subtasks)}:[/bold] {console_safe(subtask.description)} ({subtask.task_type})")
                 
                 # Propagate previously solved subtasks as context
                 context_for_subtask = "\n".join(subtask_memories)
@@ -243,11 +265,11 @@ class NeuroSymbolicAgent:
                         extracted_facts=subtask_routing.facts_extracted,
                     )
                 
-                console.print(f"[planning]✅ Subtask {idx+1} Completed. Confidence: {subtask_res.confidence:.2%}[/planning]\n")
+                console.print(f"Subtask {idx+1} completed. Confidence: {subtask_res.confidence:.2%}\n")
                 subtask_memories.append(f"- Subtask '{subtask.description}' solved: {subtask_res.answer}")
             
             # Step 4: Final Synthesis of subtask results
-            console.print(f"[planning]🔮 Synthesising final answer from all subtask solutions...[/planning]")
+            console.print("Synthesizing final answer from all subtask solutions...")
             synthesis_prompt = (
                 f"Top-level Task: '{task}'\n\n"
                 f"Here are the solutions to all decomposed subtasks:\n"
@@ -295,7 +317,7 @@ class NeuroSymbolicAgent:
         self.telemetry.record_self_improvement(rounds_used)
 
         if self.config.agent.verbose:
-            console.print(f"[improvement]🔄 {rounds_used} improvement round(s) completed[/improvement]\n")
+            console.print(f"{rounds_used} improvement round(s) completed\n")
 
         self.trace_recorder.add_step(
             "self_improvement",
@@ -317,7 +339,7 @@ class NeuroSymbolicAgent:
 
         if self.config.agent.verbose:
             if not final_check.passed:
-                console.print(f"[warning]⚠️ Constitutional violations: {[v.description for v in final_check.violations]}[/warning]\n")
+                console.print(f"[yellow]Constitutional violations: {[v.description for v in final_check.violations]}[/yellow]\n")
 
         # ── Step 7: Store episode in memory ───────────────────────────────────
         self.memory.store_episode(
@@ -342,10 +364,30 @@ class NeuroSymbolicAgent:
         )
 
         if self.config.agent.verbose:
-            console.print(f"\n[bold]✅ Answer:[/bold] {final_answer}")
+            console.print(f"\n[bold]Answer:[/bold] {console_safe(final_answer)}")
             console.print(f"[dim]Confidence: {final_confidence:.2%} | Path: {reasoning_result.path_used}[/dim]\n")
 
         return final_answer
+
+    @staticmethod
+    def _resolve_project_path(config_path: str, candidate: str) -> Path:
+        """Resolve config-relative paths for both script and installed CLI use."""
+        raw = Path(candidate)
+        if raw.is_absolute():
+            return raw
+
+        config_file = Path(config_path)
+        package_dir = Path(__file__).resolve().parent
+        search_paths = [
+            Path.cwd() / raw,
+            config_file.parent / raw,
+            package_dir / raw,
+            package_dir / "configs" / raw.name,
+        ]
+        for path in search_paths:
+            if path.exists():
+                return path
+        return search_paths[-1]
 
     def cleanup(self):
         """Cleanup resources."""
@@ -356,6 +398,7 @@ class NeuroSymbolicAgent:
 
 
 def main():
+    default_config = str(Path(__file__).resolve().parent / "configs" / "agent_config.yaml")
     parser = argparse.ArgumentParser(
         description="Production-grade NeuroSymbolic AGI Agent",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -380,7 +423,7 @@ Examples:
         """,
     )
     parser.add_argument("--task", type=str, help="Task to solve")
-    parser.add_argument("--config", type=str, default="configs/agent_config.yaml")
+    parser.add_argument("--config", type=str, default=default_config)
     parser.add_argument("--backend", type=str, choices=["local", "anthropic", "openai"], 
                        help="LLM backend (overrides config)")
     parser.add_argument("--model", type=str, help="Model name (overrides config)")
@@ -392,8 +435,11 @@ Examples:
     if args.backend:
         os.environ["LLM_BACKEND"] = args.backend
     if args.model:
-        if args.backend == "local":
+        backend = args.backend or os.getenv("LLM_BACKEND", "local")
+        if backend == "local":
             os.environ["LOCAL_MODEL_NAME"] = args.model
+        elif backend == "openai":
+            os.environ["OPENAI_MODEL"] = args.model
         else:
             os.environ["ANTHROPIC_MODEL"] = args.model
     if args.no_telemetry:
@@ -403,7 +449,7 @@ Examples:
 
     try:
         if args.interactive:
-            console.print("\n[meta]🧬 NeuroSymbolic AGI Agent — Interactive Mode[/meta]")
+            console.print("\n[bold]NeuroSymbolic AGI Agent - Interactive Mode[/bold]")
             console.print(f"[dim]Backend: {agent.config.agent.llm_backend}[/dim]")
             console.print("[dim]Type 'exit' to quit[/dim]\n")
             while True:
@@ -428,7 +474,7 @@ Examples:
             ]
             for task in demo_tasks:
                 agent.run(task)
-                print("\n" + "─" * 60 + "\n")
+                print("\n" + "-" * 60 + "\n")
     finally:
         agent.cleanup()
 

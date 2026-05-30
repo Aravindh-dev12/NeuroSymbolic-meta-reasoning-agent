@@ -113,7 +113,7 @@ class GradioAgentWrapper:
         try:
             # Overwrite LLM keys if not set to prevent initialisation failures
             if "LLM_BACKEND" not in os.environ:
-                os.environ["LLM_BACKEND"] = "anthropic"  # default
+                os.environ["LLM_BACKEND"] = "local"
             
             self.agent = NeuroSymbolicAgent(config_path=self.config_path)
             return "🧬 Agent Initialised successfully."

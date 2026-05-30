@@ -1,99 +1,107 @@
+"""Deploy the NeuroSymbolic agent dashboard to Hugging Face Spaces.
+
+Required environment variable:
+  HF_TOKEN        Hugging Face write token.
+
+Optional environment variables:
+  HF_SPACE_NAME   Space name when deploying under the token owner's account.
+  HF_SPACE_REPO_ID Full repo id, for example username/NeuroSymbolic-Meta-Reasoner.
+  HF_PRIVATE      Set to true to create/update a private Space.
 """
-deploy_to_hf.py — Programmatically deploy the NeuroSymbolic agent to Hugging Face Spaces.
-Uses huggingface_hub to push code and assets, auto-configuring Gradio hosting under user account.
-"""
+from __future__ import annotations
+
 import os
 import sys
 from pathlib import Path
-from huggingface_hub import HfApi, login
 
-def main():
-    print("====================================================")
-    print("🧬 Hugging Face Spaces Programmatic Deployment Helper")
-    print("====================================================\n")
+from huggingface_hub import HfApi
 
-    # Step 1: Authentication
-    hf_token = os.getenv("HF_TOKEN")
-    if not hf_token:
-        print("💡 Hugging Face Write Token (HF_TOKEN) not found in environment.")
-        hf_token = input("🔑 Please enter your Hugging Face WRITE token: ").strip()
-        if not hf_token:
-            print("❌ Error: A valid Hugging Face token is required for deployment.")
-            sys.exit(1)
 
+DEFAULT_SPACE_NAME = "NeuroSymbolic-Meta-Reasoner"
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _get_token() -> str:
+    token = os.getenv("HF_TOKEN", "").strip()
+    if token:
+        return token
+
+    token = input("Enter Hugging Face write token: ").strip()
+    if not token:
+        print("HF_TOKEN is required for deployment.", file=sys.stderr)
+        raise SystemExit(1)
+    return token
+
+
+def _resolve_repo_id(api: HfApi, token: str) -> str:
+    explicit_repo_id = os.getenv("HF_SPACE_REPO_ID", "").strip()
+    if explicit_repo_id:
+        return explicit_repo_id
+
+    space_name = os.getenv("HF_SPACE_NAME", DEFAULT_SPACE_NAME).strip() or DEFAULT_SPACE_NAME
     try:
-        login(token=hf_token, write_permission=True)
-        print("✅ Successfully logged in to Hugging Face.")
-    except Exception as e:
-        print(f"❌ Login failed: {e}")
-        sys.exit(1)
+        username = api.whoami(token=token)["name"]
+    except Exception as exc:
+        print(f"Could not read Hugging Face user profile: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    return f"{username}/{space_name}"
 
+
+def main() -> int:
+    project_root = Path(__file__).resolve().parent
+    token = _get_token()
     api = HfApi()
-    
-    # Step 2: Get user info to determine namespace
+    repo_id = _resolve_repo_id(api, token)
+    private = _env_bool("HF_PRIVATE")
+
+    print(f"Deploying to Hugging Face Space: https://huggingface.co/spaces/{repo_id}")
+    print("Creating or updating public Space." if not private else "Creating or updating private Space.")
+
     try:
-        user_info = api.whoami(token=hf_token)
-        username = user_info["name"]
-        print(f"👤 Detected Hugging Face user: {username}")
-    except Exception as e:
-        print(f"❌ Failed to fetch user profile: {e}")
-        sys.exit(1)
-
-    # Step 3: Get Space Name
-    default_space_name = "NeuroSymbolic-Meta-Reasoner"
-    space_name = input(f"📁 Enter Space Name [{default_space_name}]: ").strip()
-    if not space_name:
-        space_name = default_space_name
-
-    repo_id = f"{username}/{space_name}"
-    print(f"🚀 Deploying to space: https://huggingface.co/spaces/{repo_id}")
-
-    # Step 4: Create Space if it doesn't exist
-    try:
-        print(f"🛠️ Creating Hugging Face Space '{repo_id}' (SDK: gradio)...")
         api.create_repo(
             repo_id=repo_id,
             repo_type="space",
             space_sdk="gradio",
-            private=False,
+            private=private,
             exist_ok=True,
-            token=hf_token
+            token=token,
         )
-        print("✅ Space repository created/verified.")
-    except Exception as e:
-        print(f"❌ Failed to create Space repository: {e}")
-        sys.exit(1)
 
-    # Step 5: Upload folder with exclusions
-    print("📦 Preparing workspace files...")
-    ignore_patterns = [
-        "venv/**",
-        ".git/**",
-        ".github/**",
-        "logs/**",
-        "data/**",
-        "models/**",
-        "cache/**",
-        "__pycache__/**",
-        "**/*.pyc",
-        "**/.DS_Store",
-        ".env"
-    ]
-    
-    try:
-        print("📤 Uploading files to Hugging Face Spaces (this might take a few moments)...")
         api.upload_folder(
-            folder_path=".",
+            folder_path=str(project_root),
             repo_id=repo_id,
             repo_type="space",
-            ignore_patterns=ignore_patterns,
-            token=hf_token
+            ignore_patterns=[
+                ".env",
+                ".git/**",
+                ".github/**",
+                ".pytest_cache/**",
+                "__pycache__/**",
+                "**/__pycache__/**",
+                "**/*.pyc",
+                "cache/**",
+                "data/**",
+                "logs/**",
+                "models/**",
+                "venv/**",
+                ".venv/**",
+                "**/.DS_Store",
+            ],
+            token=token,
         )
-        print("\n🎉 SUCCESS! Deployment complete.")
-        print(f"🌐 Access your live web dashboard here: https://huggingface.co/spaces/{repo_id}")
-    except Exception as e:
-        print(f"\n❌ Error during upload: {e}")
-        sys.exit(1)
+    except Exception as exc:
+        print(f"Deployment failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Deployment complete: https://huggingface.co/spaces/{repo_id}")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

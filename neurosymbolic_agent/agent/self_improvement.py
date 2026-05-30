@@ -259,31 +259,6 @@ class SelfImprovementLoop:
                 improvement_achieved=False,
             )
 
-        try:
-            clean = raw.replace("```json", "").replace("```", "").strip()
-            data = json.loads(clean)
-            return CritiqueResult(
-                has_issues=bool(data.get("has_issues", False)),
-                issues=data.get("issues", []),
-                failure_modes=data.get("failure_modes", ["none"]),
-                suggested_correction=data.get("suggested_correction", ""),
-                corrected_answer=data.get("corrected_answer", answer),
-                corrected_confidence=float(data.get("corrected_confidence", confidence)),
-                improvement_achieved=bool(data.get("improvement_achieved", False)),
-                reasoning_trace=data.get("reasoning_trace", []),
-            )
-        except (json.JSONDecodeError, KeyError, ValueError) as e:
-            logger.warning(f"[SelfImprovement] Critique parse error: {e}")
-            return CritiqueResult(
-                has_issues=False,
-                issues=[],
-                failure_modes=["none"],
-                suggested_correction="",
-                corrected_answer=answer,
-                corrected_confidence=confidence,
-                improvement_achieved=False,
-            )
-
     def _apply_constitutional_correction(
         self,
         answer: str,

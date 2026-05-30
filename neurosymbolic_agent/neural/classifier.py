@@ -87,9 +87,10 @@ class TaskClassifier:
         self.embedder = embedder
         self.device = torch.device(device)
         self.labels = [TaskType.SYMBOLIC, TaskType.NEURAL, TaskType.HYBRID]
+        embedding_dim = getattr(embedder, "embedding_dim", getattr(embedder, "dim", 384))
 
         self.model = TaskClassifierNet(
-            input_dim=embedder.embedding_dim,
+            input_dim=embedding_dim,
             hidden_dim=hidden_dim,
             num_classes=len(self.labels),
         ).to(self.device)

@@ -1,11 +1,16 @@
 agent:
   name: "NeuroSymbolicMetaAgent"
-  version: "1.0.0"
-  llm_model: "claude-sonnet-4-20250514"
+  version: "2.1.0"
+  llm_backend: "local"
+  local_model_name: "auto"
+  llm_model: "gpt-4o-mini"
+  anthropic_model: "claude-sonnet-4-20250514"
   confidence_threshold: 0.75
   max_self_improvement_rounds: 3
   max_planning_depth: 5
   verbose: true
+  enable_telemetry: true
+  allow_heuristic_fallback: true
 
 routing:
   symbolic_task_types:
@@ -35,6 +40,9 @@ memory:
   embedding_model: "all-MiniLM-L6-v2"
   retrieval_top_k: 5
   similarity_threshold: 0.6
+  vector_db_type: "sqlite"
+  persist_directory: "data/vector_db"
+  enable_compression: true
 
 symbolic:
   solver: "z3"

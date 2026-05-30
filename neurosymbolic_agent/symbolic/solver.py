@@ -316,7 +316,11 @@ class SymbolicSolver:
         task_lower = task.lower()
 
         # Check if we have dynamic sandbox solvers available (requires LLM credentials or local model)
-        has_llm = self.local_llm is not None or self.backend in ("anthropic", "openai")
+        has_llm = self.local_llm is not None or (
+            self.backend == "anthropic" and bool(self.api_key or os.getenv("ANTHROPIC_API_KEY"))
+        ) or (
+            self.backend == "openai" and bool(self.api_key or os.getenv("OPENAI_API_KEY"))
+        )
 
         if has_llm:
             if self._is_sympy_math(task_lower):
@@ -346,7 +350,13 @@ class SymbolicSolver:
         return any(re.search(p, task) for p in patterns)
 
     def _is_arithmetic(self, task: str) -> bool:
-        patterns = [r"\d+\s*[\+\-\*\/]\s*\d+", r"solve.*equation", r"find.*x", r"x\s*="]
+        patterns = [
+            r"\d+\s*[\+\-\*\/]\s*\d+",
+            r"solve.*equation",
+            r"find.*x",
+            r"\d+\s*\*?\s*[a-z]\s*[\+\-=]",
+            r"[a-z]\s*=",
+        ]
         return any(re.search(p, task) for p in patterns)
 
     def _is_propositional(self, task: str) -> bool:
@@ -416,8 +426,8 @@ class SymbolicSolver:
         # First try with explicit copula (are/is) to correctly split subject/pred
         m = re.match(r"(?:all|every)\s+(.+?)\s+(?:are|is)\s+(?:a\s+|an\s+)?(.+)", s)
         if m:
-            subj = m.group(1).strip()
-            pred = m.group(2).strip()
+            subj = self._canonical_term(m.group(1))
+            pred = self._canonical_term(m.group(2))
             kb.setdefault(subj, set()).add(pred)
             steps.append(f"Rule: \u2200x. {subj}(x) \u2192 {pred}(x)")
             return
@@ -439,12 +449,12 @@ class SymbolicSolver:
                     split_at = i
                     break
             if split_at is not None:
-                subj = " ".join(words[:split_at])
-                pred = " ".join(words[split_at:])
+                subj = self._canonical_term(" ".join(words[:split_at]))
+                pred = self._canonical_term(" ".join(words[split_at:]))
             else:
                 # Default: first word is subject, rest is predicate
-                subj = words[0]
-                pred = " ".join(words[1:])
+                subj = self._canonical_term(words[0])
+                pred = self._canonical_term(" ".join(words[1:]))
             if subj and pred:
                 kb.setdefault(subj, set()).add(pred)
                 steps.append(f"Rule: \u2200x. {subj}(x) \u2192 {pred}(x)")
@@ -453,8 +463,8 @@ class SymbolicSolver:
         # ── Instance/subclass facts: <entity> are/is [a/an] <category> ──
         m = re.match(r"(.+?)\s+(?:are|is)\s+(?:a\s+|an\s+)?(.+)", s)
         if m:
-            entity = m.group(1).strip()
-            category = m.group(2).strip()
+            entity = self._canonical_term(m.group(1))
+            category = self._canonical_term(m.group(2))
             # Only short subjects are entities (avoid mis-parsing rules)
             if len(entity.split()) <= 3:
                 entities.setdefault(entity, set()).add(category)
@@ -474,8 +484,8 @@ class SymbolicSolver:
         if not m:
             return "Unable to parse question.", 0.4
 
-        entity = m.group(1).strip()
-        target_property = m.group(2).strip().rstrip("?").strip()
+        entity = self._canonical_term(m.group(1))
+        target_property = self._canonical_term(m.group(2).strip().rstrip("?"))
 
         # BFS through knowledge base
         categories = set(entities.get(entity, []))
@@ -490,8 +500,8 @@ class SymbolicSolver:
             visited.add(current)
 
             if current == target_property:
-                steps.append(f"Conclusion: {target_property}({entity}) ✓")
-                path_str = " → ".join(derivation_path + [target_property])
+                steps.append(f"Conclusion: {target_property}({entity})")
+                path_str = " -> ".join(derivation_path + [target_property])
                 return (
                     f"Yes, {entity} {target_property}. "
                     f"(Derived via chain: {path_str})"
@@ -501,10 +511,23 @@ class SymbolicSolver:
             for implied in kb.get(current, []):
                 if implied not in visited:
                     frontier.append(implied)
-                    steps.append(f"Chain: {current} → {implied}")
+                    steps.append(f"Chain: {current} -> {implied}")
                     derivation_path.append(current)
 
         return f"Cannot determine if {entity} {target_property} from given premises.", 0.5
+
+    @staticmethod
+    def _canonical_term(term: str) -> str:
+        """Normalize simple plural nouns so syllogistic chains line up."""
+        term = re.sub(r"\s+", " ", term.lower().strip())
+        words = []
+        for word in term.split():
+            if len(word) > 3 and word.endswith("ies"):
+                word = word[:-3] + "y"
+            elif len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+                word = word[:-1]
+            words.append(word)
+        return " ".join(words)
 
     # ─── Arithmetic Constraint Solving ───────────────────────────────────────
 
@@ -611,7 +634,7 @@ class SymbolicSolver:
                 solver.add(z3.Implies(P, Q))
                 solver.add(P)
 
-                steps.append(f"Rule: {p_text} → {q_text}")
+                steps.append(f"Rule: {p_text} -> {q_text}")
                 steps.append("Premise: P is True")
 
                 if solver.check() == z3.sat:

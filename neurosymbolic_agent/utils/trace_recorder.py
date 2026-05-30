@@ -93,7 +93,7 @@ class TraceRecorder:
         return trace
 
     def _persist(self, trace: ReasoningTrace) -> None:
-        with open(self.trace_file, "a") as f:
+        with open(self.trace_file, "a", encoding="utf-8") as f:
             f.write(trace.model_dump_json() + "\n")
 
     @property

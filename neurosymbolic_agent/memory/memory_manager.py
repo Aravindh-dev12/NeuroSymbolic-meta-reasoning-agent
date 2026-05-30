@@ -129,7 +129,7 @@ class MemoryManager:
             )
             # Convert to tuple format for compatibility
             similar_eps = [
-                (0.8, Episode(  # Placeholder score, will be improved
+                (self._cosine_similarity(query_embedding, ep.embedding), Episode(
                     task=ep.task,
                     answer=ep.answer,
                     path_used=ep.path_used,
@@ -183,6 +183,13 @@ class MemoryManager:
 
     def clear_working_memory(self) -> None:
         self.wm.clear()
+
+    @staticmethod
+    def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+        denom = float(np.linalg.norm(a) * np.linalg.norm(b))
+        if denom == 0.0:
+            return 0.0
+        return float(np.dot(a, b) / denom)
 
     def summary(self) -> dict[str, Any]:
         return {
