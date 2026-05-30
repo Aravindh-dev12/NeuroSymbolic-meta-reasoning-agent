@@ -1,3 +1,11 @@
+---
+title: NeuroSymbolic Meta-Reasoner
+sdk: gradio
+app_file: app.py
+pinned: false
+license: mit
+---
+
 # NeuroSymbolic Meta-Reasoning Agent
 
 A CLI-first agentic reasoning system that combines local/open-weight LLM routing, symbolic solvers, neural inference, episodic memory, hierarchical planning, recursive self-critique, and constitutional safety checks.
