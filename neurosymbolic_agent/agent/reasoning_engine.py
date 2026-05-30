@@ -4,11 +4,11 @@ Receives a routing decision and executes the appropriate reasoning pipeline.
 """
 from __future__ import annotations
 
+import os
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
-import anthropic
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -47,16 +47,81 @@ class ReasoningEngine:
     def __init__(
         self,
         model: str = "claude-sonnet-4-20250514",
+        backend: str = "anthropic",
         neural_pipeline: NeuralInferencePipeline | None = None,
         symbolic_solver: SymbolicSolver | None = None,
         knowledge_base: KnowledgeBase | None = None,
+        local_llm: Optional[Any] = None,
+        api_key: Optional[str] = None,
     ):
-        self.client = anthropic.Anthropic()
+        self.backend = backend
         self.model = model
-        self.neural = neural_pipeline or NeuralInferencePipeline(model=model)
-        self.symbolic = symbolic_solver or SymbolicSolver()
+        self.local_llm = local_llm
+        self.api_key = api_key
+        self._client = None
+
+        # Setup backend client
+        if backend == "anthropic":
+            import anthropic
+            self._client = anthropic.Anthropic(api_key=api_key or os.getenv("ANTHROPIC_API_KEY"))
+        elif backend == "openai":
+            import openai
+            self._client = openai.OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
+
         self.kb = knowledge_base or KnowledgeBase()
-        logger.info("[ReasoningEngine] Initialised")
+
+        # Pass backend config down
+        self.neural = neural_pipeline or NeuralInferencePipeline(
+            model=model,
+            backend=backend,
+            local_llm=local_llm,
+            api_key=api_key,
+        )
+        self.symbolic = symbolic_solver or SymbolicSolver(
+            backend=backend,
+            model=model,
+            local_llm=local_llm,
+            api_key=api_key,
+        )
+        logger.info(f"[ReasoningEngine] Initialised | backend={backend}")
+
+    def _llm_generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        """Call LLM client in a backend-agnostic way."""
+        if self.backend == "local":
+            if self.local_llm:
+                return self.local_llm.generate(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    max_tokens=1000,
+                    temperature=0.3,
+                )
+            else:
+                raise ValueError("Local LLM manager not provided in local backend mode")
+        elif self.backend == "anthropic":
+            kwargs = {
+                "model": self.model,
+                "max_tokens": 1000,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3,
+            }
+            if system_prompt:
+                kwargs["system"] = system_prompt
+            response = self._client.messages.create(**kwargs)
+            return response.content[0].text.strip()
+        elif self.backend == "openai":
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+            response = self._client.chat.completions.create(
+                model=self.model,
+                max_tokens=1000,
+                messages=messages,
+                temperature=0.3,
+            )
+            return response.choices[0].message.content.strip()
+        else:
+            raise ValueError(f"Unsupported backend in ReasoningEngine: {self.backend}")
 
     def execute(
         self,
@@ -161,14 +226,7 @@ class ReasoningEngine:
             f"Neural confidence: {neu.confidence:.2%}"
         )
 
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=800,
-            system=HYBRID_SYSTEM,
-            messages=[{"role": "user", "content": user_content}],
-        )
-
-        raw = response.content[0].text.strip()
+        raw = self._llm_generate(user_content, HYBRID_SYSTEM)
 
         try:
             clean = raw.replace("```json", "").replace("```", "").strip()
@@ -195,20 +253,13 @@ class ReasoningEngine:
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=5))
     def _llm_symbolic_fallback(self, task: str, symbolic_steps: list[str]) -> str:
         """When symbolic solver produces low-confidence output, use LLM to augment."""
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=600,
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"Task: {task}\n\n"
-                    f"Partial symbolic reasoning: {symbolic_steps}\n\n"
-                    "Please complete the reasoning and provide a final answer. "
-                    "Be explicit about any uncertainty."
-                ),
-            }],
+        prompt = (
+            f"Task: {task}\n\n"
+            f"Partial symbolic reasoning: {symbolic_steps}\n\n"
+            "Please complete the reasoning and provide a final answer. "
+            "Be explicit about any uncertainty."
         )
-        return response.content[0].text.strip()
+        return self._llm_generate(prompt)
 
     def _parse_and_assert_fact(self, fact_str: str) -> None:
         """Parse a natural language fact and assert it into the knowledge base."""

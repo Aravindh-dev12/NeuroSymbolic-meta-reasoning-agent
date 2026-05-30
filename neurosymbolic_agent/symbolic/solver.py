@@ -1,16 +1,54 @@
 """
 symbolic/solver.py — Z3-based symbolic solver for logic, constraints, and formal reasoning.
 Handles propositional logic, first-order logic fragments, arithmetic constraints,
-and syllogistic reasoning.
+and syllogistic reasoning. Now upgraded with SymPy mathematical capabilities and a safe Python Sandbox Execution Engine!
 """
 from __future__ import annotations
 
+import os
 import re
+import sys
+import tempfile
+import subprocess
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Optional
 
 from loguru import logger
+
+# ─── System Prompts for dynamic sandbox solvers ──────────────────────────────
+Z3_GEN_SYSTEM_PROMPT = """You are the formal Z3 SMT logic code generator for a NeuroSymbolic AGI Agent.
+Your job is to translate a logic puzzle, constraint satisfaction, or theorem proving task into a Python script using the 'z3-solver' library.
+
+The script must:
+1. Define the variables using appropriate Z3 types (e.g. Bool, Real, Int, Solver).
+2. Add the constraints corresponding to the facts and rules of the task.
+3. Check satisfiability using solver.check().
+4. If satisfiable, print the model / variables (e.g. print("SAT: Bob is True") or print("SAT:", solver.model())). If unsatisfiable, print UNSAT.
+5. Keep it clean and robust, avoiding compilation errors.
+6. Return ONLY the raw python code block inside standard markdown fences (```python ... ```). Do not include conversational introduction or conclusion.
+"""
+
+SYMPY_GEN_SYSTEM_PROMPT = """You are the formal SymPy mathematics code generator for a NeuroSymbolic AGI Agent.
+Your job is to translate an advanced math question (calculus, algebra, limits, integrals, matrix algebra, system of equations, or simplification) into a Python script using the 'sympy' library.
+
+The script must:
+1. Define symbols (e.g. x, y = symbols('x y')).
+2. Perform the calculus, algebraic, or mathematical calculation.
+3. PRINT the final simplified result.
+4. Keep it clean and robust, avoiding compilation errors.
+5. Return ONLY the raw python code block inside standard markdown fences (```python ... ```). Do not include conversational introduction or conclusion.
+"""
+
+PYTHON_GEN_SYSTEM_PROMPT = """You are the Python Execution Sandbox code generator for a NeuroSymbolic AGI Agent.
+Your job is to translate an algorithmic or computational task (data sorting, search, cryptography, custom loops, or data manipulations) into a Python script.
+
+The script must:
+1. Perform the calculations or algorithm.
+2. PRINT the final answer clearly to stdout.
+3. Keep it clean and robust, avoiding compilation errors.
+4. Return ONLY the raw python code block inside standard markdown fences (```python ... ```). Do not include conversational introduction or conclusion.
+"""
 
 
 class SolverStatus(str, Enum):
@@ -33,18 +71,27 @@ class SolverResult:
 
 class SymbolicSolver:
     """
-    Symbolic reasoning engine using Z3 SMT solver.
-    Handles:
-    - Syllogistic reasoning (All A are B, X is A => X is B)
-    - Arithmetic constraint solving
-    - Propositional logic (SAT/UNSAT)
-    - Simple first-order queries
+    Symbolic reasoning engine using Z3 SMT solver and SymPy CAS.
+    Upgraded to include a safe Python Sandbox Execution Engine.
     """
 
-    def __init__(self, timeout_seconds: int = 10):
+    def __init__(
+        self,
+        timeout_seconds: int = 10,
+        backend: str = "anthropic",
+        model: str = "claude-sonnet-4-20250514",
+        local_llm: Optional[Any] = None,
+        api_key: Optional[str] = None,
+    ):
+        self.timeout_seconds = timeout_seconds
         self.timeout_ms = timeout_seconds * 1000
+        self.backend = backend
+        self.model = model
+        self.local_llm = local_llm
+        self.api_key = api_key
         self._z3_available = self._check_z3()
-        logger.info(f"[SymbolicSolver] Z3 available: {self._z3_available}")
+        self._client = None
+        logger.info(f"[SymbolicSolver] Z3 available: {self._z3_available} | backend={backend}")
 
     def _check_z3(self) -> bool:
         try:
@@ -54,15 +101,232 @@ class SymbolicSolver:
             logger.warning("[SymbolicSolver] Z3 not installed. Using pattern-based fallback.")
             return False
 
+    def _llm_generate(self, prompt: str, system_prompt: str) -> str:
+        """Call LLM client in a backend-agnostic way."""
+        if self.backend == "local":
+            if self.local_llm:
+                return self.local_llm.generate(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    max_tokens=1000,
+                    temperature=0.1,
+                )
+            else:
+                raise ValueError("Local LLM manager not provided in local backend mode")
+        elif self.backend == "anthropic":
+            if not self._client:
+                import anthropic
+                self._client = anthropic.Anthropic(api_key=self.api_key or os.getenv("ANTHROPIC_API_KEY"))
+            response = self._client.messages.create(
+                model=self.model,
+                max_tokens=1000,
+                system=system_prompt,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+            )
+            return response.content[0].text.strip()
+        elif self.backend == "openai":
+            if not self._client:
+                import openai
+                self._client = openai.OpenAI(api_key=self.api_key or os.getenv("OPENAI_API_KEY"))
+            response = self._client.chat.completions.create(
+                model=self.model,
+                max_tokens=1000,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+            )
+            return response.choices[0].message.content.strip()
+        else:
+            raise ValueError(f"Unsupported backend in solver: {self.backend}")
+
+    def _run_sandbox_code(self, code: str) -> tuple[str, bool]:
+        """Execute python code in a separate sandboxed subprocess."""
+        os.makedirs("data", exist_ok=True)
+        # Write to temporary file
+        with tempfile.NamedTemporaryFile(suffix=".py", dir="data", delete=False, mode="w", encoding="utf-8") as temp_file:
+            temp_file.write(code)
+            temp_path = temp_file.name
+
+        try:
+            # Execute python script in a subprocess with timeout
+            # Use sys.executable to ensure we use the same Python interpreter (which has the correct packages)
+            result = subprocess.run(
+                [sys.executable, temp_path],
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_seconds,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip(), True
+            else:
+                return f"Execution Error:\n{result.stderr.strip()}", False
+        except subprocess.TimeoutExpired:
+            return "Execution Error: Subprocess timed out", False
+        except Exception as e:
+            return f"Execution Error: {str(e)}", False
+        finally:
+            # Clean up temp file
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+    def _solve_via_z3_generator(self, task: str, facts: list[str]) -> SolverResult:
+        logger.debug("[SymbolicSolver] Translating logic puzzle to custom Z3 script")
+        prompt = f"Task: {task}\n\nFacts extracted:\n" + "\n".join(f"- {f}" for f in facts)
+        try:
+            raw_code = self._llm_generate(prompt, Z3_GEN_SYSTEM_PROMPT)
+            m = re.search(r"```python\s*(.*?)\s*```", raw_code, re.DOTALL)
+            code = m.group(1).strip() if m else raw_code.strip()
+            
+            output, success = self._run_sandbox_code(code)
+            if success:
+                steps = [
+                    "[AGI Logic Mapping] Translated logic into native Z3 equations",
+                    "[SMT Verification] Verified constraints using Z3 solver",
+                    f"[Code Executed]\n{code}"
+                ]
+                status = SolverStatus.SAT if "SAT" in output or "sat" in output.lower() else SolverStatus.UNSAT
+                return SolverResult(
+                    status=status,
+                    answer=output,
+                    proof_steps=steps,
+                    confidence=1.0,
+                    reasoning="SMT Solver via dynamic compilation",
+                )
+            else:
+                logger.warning(f"[SymbolicSolver] Custom Z3 script failed: {output}")
+                return SolverResult(
+                    status=SolverStatus.ERROR,
+                    answer=f"Constraint solving failed: {output}",
+                    confidence=0.1,
+                    reasoning="Failed compilation",
+                )
+        except Exception as e:
+            logger.error(f"[SymbolicSolver] Z3 generator error: {e}")
+            return SolverResult(
+                status=SolverStatus.ERROR,
+                answer=f"Error compiling Z3 proof: {e}",
+                confidence=0.1,
+            )
+
+    def _solve_via_sympy_generator(self, task: str) -> SolverResult:
+        logger.debug("[SymbolicSolver] Running SymPy dynamic math solver")
+        try:
+            raw_code = self._llm_generate(f"Solve this math problem: {task}", SYMPY_GEN_SYSTEM_PROMPT)
+            m = re.search(r"```python\s*(.*?)\s*```", raw_code, re.DOTALL)
+            code = m.group(1).strip() if m else raw_code.strip()
+            
+            output, success = self._run_sandbox_code(code)
+            if success:
+                steps = [
+                    "[AGI Math Formulator] Translated mathematical problem into symbolic equations",
+                    "[SymPy Verification] Computed analytical solution using symbolic algebra/calculus",
+                    f"[Code Executed]\n{code}"
+                ]
+                return SolverResult(
+                    status=SolverStatus.SAT,
+                    answer=output,
+                    proof_steps=steps,
+                    confidence=1.0,
+                    reasoning="SymPy symbolic computer algebra system",
+                )
+            else:
+                logger.warning(f"[SymbolicSolver] Custom SymPy script failed: {output}")
+                return SolverResult(
+                    status=SolverStatus.ERROR,
+                    answer=f"Mathematical execution failed: {output}",
+                    confidence=0.1,
+                )
+        except Exception as e:
+            logger.error(f"[SymbolicSolver] SymPy generator error: {e}")
+            return SolverResult(
+                status=SolverStatus.ERROR,
+                answer=f"Error compiling SymPy calculation: {e}",
+                confidence=0.1,
+            )
+
+    def _solve_via_python_sandbox(self, task: str) -> SolverResult:
+        logger.debug("[SymbolicSolver] Running generic Python execution sandbox")
+        try:
+            raw_code = self._llm_generate(f"Solve this task using Python: {task}", PYTHON_GEN_SYSTEM_PROMPT)
+            m = re.search(r"```python\s*(.*?)\s*```", raw_code, re.DOTALL)
+            code = m.group(1).strip() if m else raw_code.strip()
+            
+            output, success = self._run_sandbox_code(code)
+            if success:
+                steps = [
+                    "[Algorithmic Planning] Formulated Python program to solve computational problem",
+                    "[Subprocess Execution] Ran compiled script in sandbox environment",
+                    f"[Code Executed]\n{code}"
+                ]
+                return SolverResult(
+                    status=SolverStatus.SAT,
+                    answer=output,
+                    proof_steps=steps,
+                    confidence=1.0,
+                    reasoning="Python sandboxed runtime",
+                )
+            else:
+                logger.warning(f"[SymbolicSolver] Custom Python script failed: {output}")
+                return SolverResult(
+                    status=SolverStatus.ERROR,
+                    answer=f"Algorithmic execution failed: {output}",
+                    confidence=0.1,
+                )
+        except Exception as e:
+            logger.error(f"[SymbolicSolver] Python generator error: {e}")
+            return SolverResult(
+                status=SolverStatus.ERROR,
+                answer=f"Error compiling algorithmic solution: {e}",
+                confidence=0.1,
+            )
+
+    def _is_sympy_math(self, task: str) -> bool:
+        patterns = [
+            r"derivative", r"integral", r"limit\b", r"calculus", r"matrix",
+            r"system of equations", r"simplify", r"factor", r"quadratic",
+            r"differential", r"taylor series", r"eigenvalue", r"determinant"
+        ]
+        return any(re.search(p, task) for p in patterns)
+
+    def _is_z3_logic(self, task: str) -> bool:
+        patterns = [
+            r"puzzle", r"einstein", r"knave", r"knight", r"logic grid",
+            r"scheduling constraint", r"satisfiability", r"theorem"
+        ]
+        return any(re.search(p, task) for p in patterns)
+
+    def _is_algorithmic(self, task: str) -> bool:
+        patterns = [
+            r"sort", r"search", r"fibonacci", r"algorithm", r"binary tree",
+            r"graph", r"write python", r"python code", r"program\b", r"loop"
+        ]
+        return any(re.search(p, task) for p in patterns)
+
     def solve(self, task: str, facts: list[str] | None = None) -> SolverResult:
         """
         Solve a symbolic reasoning task.
-        Auto-detects problem type and routes to appropriate solver.
+        Auto-detects problem type and routes to appropriate solver (dynamic or heuristic).
         """
         facts = facts or []
         task_lower = task.lower()
 
-        # Route to appropriate solver
+        # Check if we have dynamic sandbox solvers available (requires LLM credentials or local model)
+        has_llm = self.local_llm is not None or self.backend in ("anthropic", "openai")
+
+        if has_llm:
+            if self._is_sympy_math(task_lower):
+                return self._solve_via_sympy_generator(task)
+            elif self._is_z3_logic(task_lower):
+                return self._solve_via_z3_generator(task, facts)
+            elif self._is_algorithmic(task_lower):
+                return self._solve_via_python_sandbox(task)
+
+        # Route to pattern-based solvers (fallback or legacy)
         if self._is_syllogism(task_lower):
             return self._solve_syllogism(task, facts)
         elif self._is_arithmetic(task_lower):

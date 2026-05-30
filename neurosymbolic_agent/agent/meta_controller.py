@@ -167,12 +167,20 @@ class MetaController:
         if llm_path != classifier_path and classifier_path != "unknown":
             llm_confidence = max(llm_confidence * 0.85, 0.4)  # slight penalty for disagreement
 
+        # Active Inference Scaling: Force planning and critique for highly complex keywords
+        needs_planning = bool(data.get("needs_planning", False))
+        task_lower = task.lower()
+        complex_keywords = ["einstein", "knights and knaves", "puzzle", "schedule", "plan", "complex", "optimize", "system of equations", "derivative", "integral"]
+        if any(w in task_lower for w in complex_keywords):
+            needs_planning = True
+            llm_confidence = min(llm_confidence, 0.65)  # Force self-critique refiner loop for safety and precision
+
         return RoutingDecision(
             path=llm_path,
             confidence=llm_confidence,
             task_type=data.get("task_type", "unknown"),
             reasoning=data.get("reasoning", ""),
-            needs_planning=bool(data.get("needs_planning", False)),
+            needs_planning=needs_planning,
             facts_extracted=data.get("facts_extracted", []),
             subtask_hints=data.get("subtask_hints", []),
         )

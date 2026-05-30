@@ -1,15 +1,15 @@
 """
 agent/self_improvement.py — Recursive self-improvement loop.
 The agent critiques its own outputs, detects failure modes,
-generates corrective reasoning traces, and updates working memory.
+generates corrective reasoning traces, and updates working memory. Upgraded to support multiple backends (Anthropic, OpenAI, Local) dynamically!
 """
 from __future__ import annotations
 
+import os
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
-import anthropic
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -65,18 +65,68 @@ class SelfImprovementLoop:
     def __init__(
         self,
         model: str = "claude-sonnet-4-20250514",
+        backend: str = "anthropic",
         max_rounds: int = 3,
         constitutional_checker: ConstitutionalChecker | None = None,
         memory_manager: MemoryManager | None = None,
         hacking_detector: RewardHackingDetector | None = None,
+        local_llm: Optional[Any] = None,
+        api_key: Optional[str] = None,
     ):
-        self.client = anthropic.Anthropic()
+        self.backend = backend
         self.model = model
+        self.local_llm = local_llm
+        self.api_key = api_key
+        self._client = None
+
+        # Setup backend client
+        if backend == "anthropic":
+            import anthropic
+            self._client = anthropic.Anthropic(api_key=api_key or os.getenv("ANTHROPIC_API_KEY"))
+        elif backend == "openai":
+            import openai
+            self._client = openai.OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
+
         self.max_rounds = max_rounds
         self.constitutional_checker = constitutional_checker
         self.memory = memory_manager
         self.hacking_detector = hacking_detector or RewardHackingDetector()
-        logger.info(f"[SelfImprovementLoop] Ready | max_rounds={max_rounds}")
+        logger.info(f"[SelfImprovementLoop] Ready | backend={backend} | max_rounds={max_rounds}")
+
+    def _llm_generate(self, prompt: str, system_prompt: str) -> str:
+        """Call LLM client in a backend-agnostic way."""
+        if self.backend == "local":
+            if self.local_llm:
+                return self.local_llm.generate(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    max_tokens=1000,
+                    temperature=0.2,
+                )
+            else:
+                raise ValueError("Local LLM manager not provided in local backend mode")
+        elif self.backend == "anthropic":
+            response = self._client.messages.create(
+                model=self.model,
+                max_tokens=1000,
+                system=system_prompt,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+            )
+            return response.content[0].text.strip()
+        elif self.backend == "openai":
+            response = self._client.chat.completions.create(
+                model=self.model,
+                max_tokens=1000,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.2,
+            )
+            return response.choices[0].message.content.strip()
+        else:
+            raise ValueError(f"Unsupported backend in SelfImprovementLoop: {self.backend}")
 
     def improve(
         self,
@@ -182,14 +232,32 @@ class SelfImprovementLoop:
             f"Reasoning steps:\n" + "\n".join(f"  {i+1}. {s}" for i, s in enumerate(steps[-10:]))
         )
 
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=1000,
-            system=CRITIC_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_content}],
-        )
+        raw = self._llm_generate(user_content, CRITIC_SYSTEM_PROMPT)
 
-        raw = response.content[0].text.strip()
+        try:
+            clean = raw.replace("```json", "").replace("```", "").strip()
+            data = json.loads(clean)
+            return CritiqueResult(
+                has_issues=bool(data.get("has_issues", False)),
+                issues=data.get("issues", []),
+                failure_modes=data.get("failure_modes", ["none"]),
+                suggested_correction=data.get("suggested_correction", ""),
+                corrected_answer=data.get("corrected_answer", answer),
+                corrected_confidence=float(data.get("corrected_confidence", confidence)),
+                improvement_achieved=bool(data.get("improvement_achieved", False)),
+                reasoning_trace=data.get("reasoning_trace", []),
+            )
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            logger.warning(f"[SelfImprovement] Critique parse error: {e}")
+            return CritiqueResult(
+                has_issues=False,
+                issues=[],
+                failure_modes=["none"],
+                suggested_correction="",
+                corrected_answer=answer,
+                corrected_confidence=confidence,
+                improvement_achieved=False,
+            )
 
         try:
             clean = raw.replace("```json", "").replace("```", "").strip()

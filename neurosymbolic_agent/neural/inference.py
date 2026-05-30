@@ -1,15 +1,15 @@
 """
 neural/inference.py — Neural inference pipeline.
 Handles NLP tasks: classification, sentiment, summarisation, similarity, NER.
-Uses the LLM as the core neural engine, wrapped with structured prompting.
+Uses the LLM as the core neural engine, wrapped with structured prompting. Now upgraded to support local, anthropic, and openai backends dynamically!
 """
 from __future__ import annotations
 
+import os
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
-import anthropic
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -49,12 +49,65 @@ Respond ONLY in this JSON format:
 
 
 class NeuralInferencePipeline:
-    """Neural inference pipeline backed by LLM."""
+    """Neural inference pipeline backed by LLM. Supports multiple backends (Anthropic, OpenAI, Local)."""
 
-    def __init__(self, model: str = "claude-sonnet-4-20250514"):
-        self.client = anthropic.Anthropic()
+    def __init__(
+        self,
+        model: str = "claude-sonnet-4-20250514",
+        backend: str = "anthropic",
+        local_llm: Optional[Any] = None,
+        api_key: Optional[str] = None,
+    ):
+        self.backend = backend
         self.model = model
-        logger.info("[NeuralInference] Pipeline ready")
+        self.local_llm = local_llm
+        self.api_key = api_key
+        self._client = None
+
+        # Setup backend client
+        if backend == "anthropic":
+            import anthropic
+            self._client = anthropic.Anthropic(api_key=api_key or os.getenv("ANTHROPIC_API_KEY"))
+        elif backend == "openai":
+            import openai
+            self._client = openai.OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
+
+        logger.info(f"[NeuralInference] Pipeline ready | backend={backend}")
+
+    def _llm_generate(self, prompt: str, system_prompt: str) -> str:
+        """Call LLM client in a backend-agnostic way."""
+        if self.backend == "local":
+            if self.local_llm:
+                return self.local_llm.generate(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    max_tokens=1000,
+                    temperature=0.3,
+                )
+            else:
+                raise ValueError("Local LLM manager not provided in local backend mode")
+        elif self.backend == "anthropic":
+            response = self._client.messages.create(
+                model=self.model,
+                max_tokens=1000,
+                system=system_prompt,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+            )
+            return response.content[0].text.strip()
+        elif self.backend == "openai":
+            response = self._client.chat.completions.create(
+                model=self.model,
+                max_tokens=1000,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.3,
+            )
+            return response.choices[0].message.content.strip()
+        else:
+            raise ValueError(f"Unsupported backend in inference: {self.backend}")
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     def run(self, task: str, context: str = "") -> NeuralInferenceResult:
@@ -65,14 +118,7 @@ class NeuralInferencePipeline:
 
         logger.debug(f"[NeuralInference] Running inference on: {task[:80]}")
 
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=1000,
-            system=NEURAL_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_content}],
-        )
-
-        raw = response.content[0].text.strip()
+        raw = self._llm_generate(user_content, NEURAL_SYSTEM_PROMPT)
 
         try:
             # Strip markdown fences if present

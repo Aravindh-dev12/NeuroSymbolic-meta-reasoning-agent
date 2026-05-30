@@ -121,7 +121,10 @@ class NeuroSymbolicAgent:
         )
         self.reasoning_engine = ReasoningEngine(
             model=model_name,
+            backend=self.config.agent.llm_backend,
             knowledge_base=self.kb,
+            local_llm=self.local_llm,
+            api_key=self.config.agent.api_key,
         )
         registry = PrinciplesRegistry(principles=principles_raw)
         self.constitutional_checker = ConstitutionalChecker(
@@ -132,10 +135,13 @@ class NeuroSymbolicAgent:
         self.hacking_detector = RewardHackingDetector()
         self.self_improvement = SelfImprovementLoop(
             model=model_name,
+            backend=self.config.agent.llm_backend,
             max_rounds=self.config.agent.max_self_improvement_rounds,
             constitutional_checker=self.constitutional_checker,
             memory_manager=self.memory,
             hacking_detector=self.hacking_detector,
+            local_llm=self.local_llm,
+            api_key=self.config.agent.api_key,
         )
         self.planner = HierarchicalPlanner(
             model=model_name,
@@ -211,23 +217,62 @@ class NeuroSymbolicAgent:
         # ── Step 3: Optional hierarchical planning ────────────────────────────
         if routing.needs_planning:
             plan = self.planner.decompose(task)
-            console.print(f"[planning]📐 Plan: {len(plan.subtasks)} subtasks[/planning]")
-            # For now, execute the full task with plan context injected
-            task_with_plan = (
-                f"{task}\n\n[Execution plan: "
-                + "; ".join(s.description for s in plan.subtasks) + "]"
+            console.print(f"[planning]📐 Plan: Decomposed into {len(plan.subtasks)} subtasks. Running sequential execution...[/planning]")
+            
+            # Topological sort of subtasks to resolve dependencies
+            sorted_subtasks = self.planner.topological_sort(plan.subtasks)
+            subtask_memories = []
+            
+            for idx, subtask in enumerate(sorted_subtasks):
+                console.print(f"[planning]⏳ Running Subtask {idx+1}/{len(sorted_subtasks)}: {subtask.description} ({subtask.task_type})[/planning]")
+                
+                # Propagate previously solved subtasks as context
+                context_for_subtask = "\n".join(subtask_memories)
+                subtask_prompt = f"Perform subtask: '{subtask.description}' as part of solving the main task: '{task}'."
+                if context_for_subtask:
+                    subtask_prompt += f"\n\nHere are the results of completed subtasks:\n{context_for_subtask}"
+                
+                # Execute subtask using routing + reasoning engine
+                subtask_routing = self.meta_controller.route(subtask_prompt, memory_context=memory_ctx.context_summary)
+                
+                with TimingContext(self.telemetry, f"reasoning_subtask_{idx}"):
+                    subtask_res = self.reasoning_engine.execute(
+                        task=subtask_prompt,
+                        path=subtask_routing.path,
+                        memory_context=memory_ctx.context_summary,
+                        extracted_facts=subtask_routing.facts_extracted,
+                    )
+                
+                console.print(f"[planning]✅ Subtask {idx+1} Completed. Confidence: {subtask_res.confidence:.2%}[/planning]\n")
+                subtask_memories.append(f"- Subtask '{subtask.description}' solved: {subtask_res.answer}")
+            
+            # Step 4: Final Synthesis of subtask results
+            console.print(f"[planning]🔮 Synthesising final answer from all subtask solutions...[/planning]")
+            synthesis_prompt = (
+                f"Top-level Task: '{task}'\n\n"
+                f"Here are the solutions to all decomposed subtasks:\n"
+                + "\n".join(subtask_memories) + "\n\n"
+                f"Please combine, cross-verify, and synthesise these intermediate solutions into a logical, verified, and complete final response."
             )
+            
+            with TimingContext(self.telemetry, "reasoning_synthesis"):
+                reasoning_result = self.reasoning_engine.execute(
+                    task=synthesis_prompt,
+                    path="hybrid",
+                    memory_context=memory_ctx.context_summary,
+                )
+            
+            task_with_plan = synthesis_prompt
         else:
             task_with_plan = task
-
-        # ── Step 4: Execute reasoning on selected path ────────────────────────
-        with TimingContext(self.telemetry, "reasoning"):
-            reasoning_result = self.reasoning_engine.execute(
-                task=task_with_plan,
-                path=routing.path,
-                memory_context=memory_ctx.context_summary,
-                extracted_facts=routing.facts_extracted,
-            )
+            # ── Step 4: Execute reasoning on selected path ────────────────────────
+            with TimingContext(self.telemetry, "reasoning"):
+                reasoning_result = self.reasoning_engine.execute(
+                    task=task_with_plan,
+                    path=routing.path,
+                    memory_context=memory_ctx.context_summary,
+                    extracted_facts=routing.facts_extracted,
+                )
 
         self.trace_recorder.add_step(
             "reasoning",
