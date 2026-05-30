@@ -1,2 +1,22 @@
-# Hugging Face Spaces installs this file before running app.py.
--e .[dashboard]
+# Hugging Face Spaces installs requirements.txt before copying the repo.
+# Keep this file as explicit runtime dependencies.
+anthropic>=0.25.0
+huggingface_hub>=0.30.0
+loguru>=0.7.2
+numpy>=1.26.0
+openai>=1.0.0
+pandas>=2.0.0
+plotly>=5.0.0
+psutil>=5.9.0
+pydantic>=2.7.0
+python-dotenv>=1.0.0
+pyyaml>=6.0.1
+requests>=2.31.0
+rich>=13.7.0
+sentence-transformers>=3.0.0
+sympy>=1.12
+tenacity>=8.3.0
+torch>=2.2.0
+tqdm>=4.66.0
+transformers>=4.40.0
+z3-solver>=4.13.0
